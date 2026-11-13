@@ -17,12 +17,12 @@
       ]
     }
   ],
-  "version": "0.1.1",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "garmin-personal-mcp",
-      "version": "0.1.1",
+      "version": "0.3.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -38,6 +38,28 @@
         {
           "name": "GARMIN_MCP_DOWNLOAD_DIR",
           "description": "Where garmin_download_activity saves activity files",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/mason-levyy/garmin-personal-mcp:0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GARMIN_PERSONAL_API_KEY",
+          "description": "Garmin Connect Personal API key, from Garmin Connect under Settings, Personal API",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "TZ",
+          "description": "Your time zone, e.g. America/Los_Angeles, so tools that default to today use your date (the container otherwise runs on UTC)",
           "isRequired": false,
           "format": "string"
         }

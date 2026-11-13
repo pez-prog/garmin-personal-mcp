@@ -93,7 +93,7 @@ The package is `src/garmin_personal_mcp/`. A tool call flows top to bottom:
   every user's model calls the tools, so treat that as a user-facing change
   too (see below).
 - **Dependency pins are deliberate.** `garmin-connect-personal-api-python`
-  stays below 2 and `mcp` below 2 until someone has tested a new major against
+  stays below 2 and `mcp` below 3 until someone has tested a new major against
   a real account.
 
 ## Protect existing users
@@ -178,6 +178,7 @@ pre-1.0, so a breaking release bumps the minor version.
   the PR title becomes the commit subject.
 - User-visible changes get an entry under **Unreleased** in `CHANGELOG.md`.
   Don't create any other new docs unless asked.
-- A release bumps `version` in `pyproject.toml`, both version fields in
-  `server.json`, and the Claude Code plugin's version and pin in `plugin/`
+- A release bumps `version` in `pyproject.toml`, both version fields and the
+  OCI image tag in `server.json`, and the Claude Code plugin's version and pin
+  in `plugin/`
   together, and CI fails if they drift. CONTRIBUTING.md has the full steps.

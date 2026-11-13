@@ -6,6 +6,7 @@
 
 **Ask your AI about your Garmin data, on Garmin's official API.**
 
+[![Mason-Levyy/garmin-personal-mcp MCP server](https://glama.ai/mcp/servers/Mason-Levyy/garmin-personal-mcp/badges/score.svg)](https://glama.ai/mcp/servers/Mason-Levyy/garmin-personal-mcp)
 [![PyPI](https://img.shields.io/pypi/v/garmin-personal-mcp?color=0a64e6)](https://pypi.org/project/garmin-personal-mcp/)
 [![CI](https://github.com/Mason-Levyy/garmin-personal-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Mason-Levyy/garmin-personal-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FMason-Levyy%2Fgarmin-personal-mcp%2Fmain%2Fpyproject.toml)](https://github.com/Mason-Levyy/garmin-personal-mcp/blob/main/pyproject.toml)
@@ -148,6 +149,122 @@ Instead of the key file you can set `GARMIN_PERSONAL_API_KEY`, which takes
 precedence. The key file and bearer-token cache are the same ones Garmin's
 `gc-personal` CLI uses, so a key saved by either works for both.
 
+## Docker Compose
+
+Run the server as a background HTTP service using the prebuilt image. Save
+this as `compose.yaml`:
+
+```yaml
+services:
+  garmin:
+    image: ghcr.io/mason-levyy/garmin-personal-mcp:latest
+    command: ["--http", "--host", "0.0.0.0"]
+    environment:
+      - GARMIN_PERSONAL_API_KEY
+      - TZ
+    ports:
+      - "127.0.0.1:8491:8491"
+    volumes:
+      - garmin-config:/home/garmin/.config/garmin
+      - ./downloads:/home/garmin/Downloads/garmin
+    restart: unless-stopped
+
+volumes:
+  garmin-config:
+```
+
+`latest` is the newest release, the same version PyPI serves. To stay on one
+version, use a version tag such as `:0.2.0` instead.
+
+From the directory containing `compose.yaml`, create the downloads folder and
+pull the image:
+
+```bash
+mkdir -p downloads
+docker compose pull
+```
+
+Activity files from `garmin_download_activity` land in `./downloads`. The tool
+reports the path inside the container (`/home/garmin/Downloads/garmin/...`),
+which is the same file. The container runs as uid 1000, so on Linux, if your
+uid isn't 1000, run `sudo chown 1000 downloads`.
+
+Don't mount an existing `~/.config/garmin` from the host into the container.
+The key file there is readable only by its owner, so the container can't read
+it unless your uid is 1000. Use one of the options below instead.
+
+The container paths above and uid 1000 stay the same across releases.
+
+The container runs on UTC unless you set `TZ`, and tools that default to
+today use the container's date. In the evening west of UTC that's already
+tomorrow, and in the morning east of it, still yesterday. Add your time zone
+to `.env` (or your shell) so "today" matches your day:
+
+```dotenv
+TZ=America/Los_Angeles
+```
+
+### Authentication
+
+Choose **one** of these authentication options:
+
+#### 1. Add your API key to a `.env` file
+
+Create `.env` next to `compose.yaml` and add your Personal API key:
+
+```dotenv
+GARMIN_PERSONAL_API_KEY='your-personal-api-key'
+```
+
+Compose loads this file automatically. You do not need to run `auth`.
+
+#### 2. Use the interactive `auth` command
+
+Leave `GARMIN_PERSONAL_API_KEY` unset in your shell and `.env`, then run:
+
+```bash
+docker compose run --rm garmin auth
+```
+
+Paste your Personal API key at the prompt. It is saved for subsequent starts.
+
+### Start the server
+
+```bash
+docker compose up -d
+```
+
+In your MCP client, add a **Streamable HTTP** server with the URL
+`http://127.0.0.1:8491/mcp`.
+
+The server only accepts requests addressed to `127.0.0.1` or `localhost`, and
+it has no authentication. To reach it from another machine, keep the port on
+`127.0.0.1`, put an authenticating proxy or tailnet in front (see
+[Remote / HTTP mode](#remote--http-mode)), and add the hostname clients use to
+`command`:
+
+```yaml
+    command: ["--http", "--host", "0.0.0.0", "--allowed-host", "garmin.example.ts.net"]
+```
+
+Without `--allowed-host`, requests to any other hostname are rejected.
+
+### Build from source
+
+Clone the repository and use [compose.yaml](compose.yaml) in its root, which
+builds the image from source. From the repository directory, run:
+
+```bash
+docker compose build
+```
+
+Then follow the authentication and startup steps above. After updating the
+source, rebuild and restart with:
+
+```bash
+docker compose up --build -d
+```
+
 ## Tools
 
 All tools take dates as `YYYY-MM-DD`. Range tools default to the 7 days ending
@@ -205,7 +322,7 @@ DNS-rebinding check accepts its Host header.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `GARMIN_PERSONAL_API_KEY` | Personal API key; overrides the saved key file | – |
-| `GARMIN_MCP_DOWNLOAD_DIR` | Where `garmin_download_activity` saves files | `~/Downloads/garmin` (platform downloads dir) |
+| `GARMIN_MCP_DOWNLOAD_DIR` | Where `garmin_download_activity` saves files; the tool can't write outside it | `~/Downloads/garmin` (platform downloads dir) |
 
 ## Troubleshooting
 

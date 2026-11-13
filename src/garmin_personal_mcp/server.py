@@ -1,13 +1,15 @@
 import asyncio
 import datetime
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from garmin_personal_api import GarminPersonalApiError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from . import (
+    __version__,
     activities,
     config,
     daily_summary,
@@ -22,18 +24,36 @@ from . import (
     womens_health,
 )
 
-mcp = FastMCP("garmin")
+mcp = MCPServer(
+    "garmin",
+    title="Garmin Personal MCP",
+    version=__version__,
+    website_url="https://github.com/Mason-Levyy/garmin-personal-mcp",
+)
 
-READS_GARMIN = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+READS_GARMIN = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 SAVES_LOCAL_FILE = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 
 DEFAULT_SPAN_DAYS = 7
+TOO_MANY_REQUESTS = 429
+FIRST_SERVER_ERROR = 500
 NO_DATA = {
     "no_data": "Garmin returned nothing for this request: nothing was recorded "
     "for that date yet, or your device doesn't measure it."
 }
+
+
+class UserInputError(ValueError, ToolError):
+    pass
+
+
+class ToolActivitySearchError(activities.ActivitySearchError, ToolError):
+    pass
 
 
 def parse_day(value: str | None) -> datetime.date:
@@ -42,7 +62,7 @@ def parse_day(value: str | None) -> datetime.date:
     try:
         return datetime.date.fromisoformat(value)
     except ValueError:
-        raise ValueError(f"dates must be YYYY-MM-DD, got {value!r}") from None
+        raise UserInputError(f"dates must be YYYY-MM-DD, got {value!r}") from None
 
 
 def parse_range(
@@ -52,17 +72,45 @@ def parse_range(
     if start is None:
         return end_day - datetime.timedelta(days=DEFAULT_SPAN_DAYS - 1), end_day
     start_day = parse_day(start)
-    if start_day > end_day:
-        raise ValueError(
-            f"start ({start_day}) must be on or before end ({end_day}); swap them"
+    if start_day <= end_day:
+        return start_day, end_day
+    if end is None:
+        raise UserInputError(
+            f"start ({start_day}) is after today ({end_day}), which end defaults "
+            "to; pass an earlier start, or an end on or after it"
         )
-    return start_day, end_day
+    raise UserInputError(
+        f"start ({start_day}) must be on or before end ({end_day}); swap them"
+    )
+
+
+def garmin_error_message(exc: GarminPersonalApiError) -> str:
+    status = getattr(exc, "status_code", None)
+    if status == TOO_MANY_REQUESTS:
+        return f"{exc}. Garmin is rate limiting requests; wait a minute and retry."
+    if status is not None and status >= FIRST_SERVER_ERROR:
+        return f"{exc}. Garmin's servers had a problem; try again later."
+    return str(exc)
 
 
 async def fetch(op: Callable[[Any], Any]) -> dict:
     """MCP clients render a bare list as one content block per item, so an
     empty list would reach the model as nothing at all."""
-    result = await asyncio.to_thread(garmin_client.call, op)
+    try:
+        result = await asyncio.to_thread(garmin_client.call, op)
+    except garmin_client.ApiKeyError as exc:
+        raise ToolError(str(exc)) from exc
+    except GarminPersonalApiError as exc:
+        raise ToolError(garmin_error_message(exc)) from exc
+    # A local file error (saving a download) names the file; requests'
+    # connection errors and timeouts subclass OSError without one.
+    except OSError as exc:
+        if exc.filename is not None:
+            raise ToolError(f"Couldn't save {exc.filename}: {exc.strerror}") from exc
+        raise ToolError(
+            f"Couldn't reach Garmin ({type(exc).__name__}). "
+            f"{garmin_client.UNREACHABLE_HINT}"
+        ) from exc
     if result is None:
         return NO_DATA
     if isinstance(result, list):
@@ -74,8 +122,9 @@ async def fetch(op: Callable[[Any], Any]) -> dict:
 async def garmin_get_day(date: str | None = None) -> dict:
     """One day at a glance: daily summary (steps, calories, intensity minutes,
     resting HR, stress, body battery), last night's sleep, HRV, body battery,
-    stress, and the day's activities. A section Garmin has no data for yet
-    comes back as {"error": ...} while the rest still load.
+    stress, and the day's activities. A section Garmin has no data for comes
+    back as null or [], or as {"error": ...} when Garmin rejects that
+    section's request; the other sections still load.
 
     date: YYYY-MM-DD (default: today).
     """
@@ -366,7 +415,9 @@ async def garmin_search_activities(
     activityId to garmin_get_activity for splits and full detail.
 
     All filters are optional and combine:
-    start, end: YYYY-MM-DD, by the activity's local start date.
+    start, end: YYYY-MM-DD inclusive, by the activity's local start date.
+    Omit both to search all dates. With only end, the search covers the 7
+    days ending on it; with only start, it runs through today.
     search: text in the activity name or description.
     activity_type: parent type key, e.g. running, cycling, swimming,
     strength_training, hiking, walking. activity_subtype: a child key such as
@@ -390,6 +441,10 @@ async def garmin_search_activities(
     first, last = None, None
     if start is not None or end is not None:
         first, last = parse_range(start, end)
+    try:
+        start_area = activities.bounding_box(north, south, east, west)
+    except activities.ActivitySearchError as exc:
+        raise ToolActivitySearchError(str(exc)) from exc
     filters = activities.ActivitySearch(
         start=first,
         end=last,
@@ -411,7 +466,7 @@ async def garmin_search_activities(
         min_elevation=min_elevation,
         max_elevation=max_elevation,
         min_avg_power=min_avg_power,
-        start_area=activities.bounding_box(north, south, east, west),
+        start_area=start_area,
         min_max_depth=min_max_depth,
         max_max_depth=max_max_depth,
         deco_dive=deco_dive,
@@ -455,12 +510,15 @@ async def garmin_download_activity(
     saved path, size, and the files inside.
 
     activity_id: activityId from garmin_search_activities.
-    directory: where to save (default: GARMIN_MCP_DOWNLOAD_DIR, else a garmin
-    folder in the Downloads directory).
+    directory: a subfolder of the download folder to save in, e.g. "races"
+    (default: the download folder itself). The download folder is
+    GARMIN_MCP_DOWNLOAD_DIR, else a garmin folder in the Downloads directory;
+    paths that lead outside it are rejected.
     """
-    target = config.download_dir()
-    if directory is not None:
-        target = Path(directory).expanduser()
+    try:
+        target = config.download_target(directory)
+    except ValueError as exc:
+        raise UserInputError(str(exc)) from exc
     return await fetch(lambda c: activities.download_activity(c, activity_id, target))
 
 

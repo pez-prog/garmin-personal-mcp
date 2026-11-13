@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+import sys
 
 import pytest
 from conftest import FakeClient
@@ -34,12 +35,19 @@ def test_parse_range_rejects_an_inverted_range():
         server.parse_range("2026-10-22", "2026-10-21")
 
 
+def test_parse_range_explains_a_future_start_without_an_end():
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    with pytest.raises(ValueError, match="which end defaults to") as error:
+        server.parse_range(tomorrow, None)
+    assert "swap" not in str(error.value)
+
+
 def test_every_endpoint_has_a_tool():
     assert len(tools()) == 26
 
 
 def test_tools_are_read_only_except_the_local_download():
-    writers = [tool.name for tool in tools() if not tool.annotations.readOnlyHint]
+    writers = [tool.name for tool in tools() if not tool.annotations.read_only_hint]
     assert writers == ["garmin_download_activity"]
 
 
@@ -57,7 +65,8 @@ def test_tool_returns_garmin_data(client):
 
 
 def test_list_results_are_wrapped_so_empty_ones_still_render(client):
-    [content] = asyncio.run(server.mcp.call_tool("garmin_search_activities", {}))
+    result = asyncio.run(server.mcp.call_tool("garmin_search_activities", {}))
+    [content] = result.content
     assert json.loads(content.text) == {"results": []}
 
 
@@ -81,7 +90,8 @@ def test_search_rejects_a_partial_bounding_box(client):
     assert client.calls == []
 
 
-def test_download_defaults_to_the_configured_directory(client, monkeypatch, tmp_path):
+@pytest.fixture
+def saved(client, monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_MCP_DOWNLOAD_DIR", str(tmp_path / "fits"))
     saved = {}
 
@@ -90,5 +100,56 @@ def test_download_defaults_to_the_configured_directory(client, monkeypatch, tmp_
         return {}
 
     monkeypatch.setattr(activities, "download_activity", fake_download)
+    return saved
+
+
+def test_download_defaults_to_the_configured_directory(saved, tmp_path):
     asyncio.run(server.garmin_download_activity(123))
     assert saved["directory"] == tmp_path / "fits"
+
+
+def test_download_saves_in_a_subfolder_of_the_configured_directory(saved, tmp_path):
+    asyncio.run(server.garmin_download_activity(123, directory="races/2026"))
+    assert saved["directory"] == (tmp_path / "fits" / "races" / "2026").resolve()
+
+
+def test_download_accepts_an_absolute_path_inside_the_configured_directory(
+    saved, tmp_path
+):
+    inside = tmp_path / "fits" / "races"
+    asyncio.run(server.garmin_download_activity(123, directory=str(inside)))
+    assert saved["directory"] == inside.resolve()
+
+
+@pytest.mark.parametrize("directory", ["..", "races/../../elsewhere", "/"])
+def test_download_rejects_a_directory_outside_the_configured_one(saved, directory):
+    with pytest.raises(ValueError, match="GARMIN_MCP_DOWNLOAD_DIR"):
+        asyncio.run(server.garmin_download_activity(123, directory=directory))
+    assert saved == {}
+
+
+def test_download_rejects_an_absolute_path_outside_the_configured_one(saved, tmp_path):
+    with pytest.raises(ValueError, match="must be inside"):
+        asyncio.run(
+            server.garmin_download_activity(123, directory=str(tmp_path / "other"))
+        )
+    assert saved == {}
+
+
+def link_directory(link, target):
+    if sys.platform == "win32":
+        # Junctions behave like directory symlinks but don't need admin rights.
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+        return
+    link.symlink_to(target)
+
+
+def test_download_rejects_a_symlink_that_leads_outside(saved, tmp_path):
+    (tmp_path / "fits").mkdir()
+    (tmp_path / "outside").mkdir()
+    link_directory(tmp_path / "fits" / "escape", tmp_path / "outside")
+    with pytest.raises(ValueError, match="must be inside"):
+        asyncio.run(server.garmin_download_activity(123, directory="escape"))
+    assert saved == {}

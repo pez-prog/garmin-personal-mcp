@@ -6,8 +6,70 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- MCP clients now see the server's version, title, and website in
+  `serverInfo` (the version was empty). The server name is still `garmin`.
+- Docker: `compose.yaml` passes `TZ` through, and the Registry's Docker
+  package lists it, so tools that default to today can use your date instead
+  of UTC's. Set `TZ` (e.g. `TZ=America/Los_Angeles` in `.env`). Without it,
+  the container stays on UTC as before.
+
 ### Changed
 
+- `garmin_search_activities` describes how its dates default (neither: all
+  dates; only `end`: the 7 days ending on it; only `start`: through today),
+  and `garmin_get_day` says an empty section comes back as `null` or `[]`.
+  Behavior is unchanged, but models read these descriptions, so they may
+  pass dates differently.
+
+### Fixed
+
+- A `start` after today with no `end` no longer suggests swapping an `end`
+  that wasn't passed.
+- `garmin_download_activity` no longer saves a file when Garmin's response
+  isn't a ZIP, which would have replaced an earlier good download. It now
+  tells the model why nothing was saved instead of a bare "Error executing
+  tool".
+
+## [0.3.0] - 2026-11-02
+
+### Added
+
+- The Docker image is listed in the MCP Registry next to the PyPI package, so
+  clients that install from the Registry can choose to run it in a container.
+
+### Changed
+
+- Require version 2 of the MCP Python SDK (`mcp>=2.3,<3`) instead of version 1.
+  If another package in the same environment still needs MCP SDK 1.x, pin
+  `garmin-personal-mcp==0.2.0` until it supports version 2. uvx, the Claude
+  Code plugin, and the Docker image install into their own environments and
+  aren't affected.
+- A failed Garmin request still reaches the model with its reason under SDK 2,
+  plus what to do next: wait and retry when rate limited, try later on a
+  Garmin server error, check the connection when Garmin can't be reached.
+
+## [0.2.0] - 2026-10-28
+
+### Added
+
+- A Docker image, `ghcr.io/mason-levyy/garmin-personal-mcp`, for amd64 and
+  arm64, published with each release as `X.Y.Z` and `latest`, after the same
+  version is on PyPI.
+- A Docker Compose example for localhost HTTP with a persistent key and
+  activity downloads in `./downloads`.
+
+### Changed
+
+- `garmin_download_activity` only saves inside the download folder
+  (`GARMIN_MCP_DOWNLOAD_DIR`, else `~/Downloads/garmin`). Its `directory`
+  argument now picks a subfolder of it, such as `races`, and a path that leads
+  outside it (an absolute path elsewhere, `..`, or a symlink) is rejected, so a
+  confused or prompt-injected model can't write files elsewhere on your
+  machine. If you saved downloads somewhere else, set
+  `GARMIN_MCP_DOWNLOAD_DIR` to that folder. To keep the old behavior for now,
+  pin `garmin-personal-mcp==0.1.1`.
 - The README opens with what the server is, who it's for, and that it's free,
   and the project is called Garmin Personal MCP everywhere, including the MCP
   Registry title (was "Garmin Connect"), so directories and search engines
@@ -54,6 +116,8 @@ All notable changes to this project are documented here. The format follows
 - Streamable HTTP transport (`--http`), with `--allowed-host` for running
   behind a reverse proxy.
 
-[Unreleased]: https://github.com/Mason-Levyy/garmin-personal-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Mason-Levyy/garmin-personal-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Mason-Levyy/garmin-personal-mcp/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Mason-Levyy/garmin-personal-mcp/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Mason-Levyy/garmin-personal-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Mason-Levyy/garmin-personal-mcp/releases/tag/v0.1.0
