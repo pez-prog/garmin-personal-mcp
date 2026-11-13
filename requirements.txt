@@ -1,0 +1,7 @@
+mcp
+garminconnect
+fitparse
+requests
+fastapi
+uvicorn
+pydantic
